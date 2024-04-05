@@ -1,0 +1,9 @@
+Models,RMSE
+mlr,0.246
+mlr_int,0.248
+sem,0.249
+sp,0.246
+sp_gamma,0.254
+sp_invgaus,0.302
+rf,0.255
+rfsp,0.255

@@ -1,0 +1,198 @@
+---
+title: "a_cand_XER_EPT_crs_valid"
+author: "C. Emi Fergus"
+date: "2024-01-30"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Compare candidate model predictive performance
+We are interested in developing models that will allow for predicting changes in EPT richness under hypothetical management scenarios. We will evaluate the models based on their predictive performance (RMSE & R2). There may be benefits to using modeling approaches that allow for causal inference. 
+
+```{r, echo=FALSE,warning=FALSE, message=FALSE}
+remove(list=ls())
+
+library(tidyverse)
+library(sf)
+library(spmodel)
+library(lavaan)
+library(ranger)
+library(ggpmisc) # for lm equation
+library(ggpubr)
+devtools::load_all()
+library(SEMscenarios)
+```
+
+```{r,echo=FALSE,warning=FALSE,message=FALSE}
+# LOAD DATA
+# Processed NRSA data - all 0809 and only new sites from later surveys
+#  VISITS 1 and 2 n = 4578 w/ 321 vars
+dat_org<-read.csv("C:/Users/efergus/SEMscenarios/data_processed/Compiled/nrsa081318_nonresampled_VISIT_12.csv")
+
+# PROCESSED DATA VISIT_NO=1 WADEABLE n = 2736
+dat_proc<-dat_org%>%
+  filter(VISIT_NO==1)%>%
+  mutate(PROTOCOL=as.factor(PROTOCOL))%>%
+  drop_na(PROTOCOL)%>%
+  filter(PROTOCOL=="WADEABLE")
+
+# TRANSFORM IMPERVIOUS SURFACE; DROP MISSING QLOW n = 2584
+dat_proc<-dat_proc%>%
+  mutate(asin_PCTIMP_WS = asin(sqrt(PCTIMP_WS/100)),
+         asin_PCTIMP_WsRp100 = asin(sqrt(PCTIMP_WsRp100/100)),
+         asin_PCTIMP_CAT = asin(sqrt(PCTIMP_CAT/100)),
+         asin_PCTIMP_CATRP100 = asin(sqrt(PCTIMP_CATRP100/100)))%>%
+  mutate(L_OE_SCORE = log10(OE_SCORE+0.01))%>%
+  drop_na(LOE_QLow_cl)%>%
+  drop_na(OE_SCORE)%>%
+  mutate(PSUMPY_SY_WS_sc=scale(PSUMPY_SY_WS))
+
+
+##########
+# XERIC n = 271 observations per unique site in NRSA surveys (08/09 + 13/14 + 18/19)
+xer_org<-dat_proc%>%
+  filter(AG_ECO9=="XER")
+
+#######
+# ASSIGN INDEX NUMBER 1-10 for 10-fold cross-validation
+xer_org<-xer_org%>%
+  mutate(index=sample(rep(1:10, length.out=271)))
+```
+
+
+# Apply candidate model prediction function
+Check by calling "index_value =1" to make sure function is working 
+```{r, echo=FALSE,warning=FALSE,message=FALSE}
+# Look at function output for Index=1 obs
+index_1<-pred_ept(index_value = 1, data=xer_org,log10=FALSE)
+head(index_1)
+
+```
+
+# 10-Fold Cross Validation
+Apply the candidate model prediction function across index values. Each observation is assigned a group (index) number. This will allow us to systematically hold out part of the observations to test model fit. With k-fold cross-validation, we will evaluate the predictive performance multiple times using the full set of observations by cycling through the index values by specifying a test dataset based on the index value and treating the remaining groups as the training dataset. Each observation will be used in the test data 1 time and used the train the model k-1 times.
+10-fold cross validation.
+
+The function also allows us to compare untransformed O/E vs log10 OE. 
+
+```{r,echo=FALSE,warning=FALSE,message=FALSE}
+#############
+## Create another function for 10-fold Cross Validation that goes through indexes 1 thru 10 and (map) applies
+##  the candidate model function to each element of a list (index) to create a list
+pred_ept_cv<-function(indexes,...){
+  map(indexes,pred_ept,...)
+}
+
+##########
+## Apply function to grab the predicted values for each of the candidate models - outputs as list
+vals<-pred_ept_cv(indexes = 1:10, data=xer_org,log10=FALSE)
+
+# COMBINE PREDICTIONS ACROSS INDEXES
+predictions<-bind_rows(vals)
+
+#
+obs<-predictions$obs
+pred_cv<-predictions%>%
+  select(!obs)
+
+```
+
+# Evaluate relative model performance using RMSE and R2
+```{r, echo=FALSE,warning=FALSE,message=FALSE}
+##############
+## CREATE FUNCTIONS TO EVALUTE CANDIDATE MODEL PREDICTIVE PERFORMANCE
+##########
+# RMSE
+#https://www.r-bloggers.com/2021/07/how-to-calculate-root-mean-square-error-rmse-in-r/
+rmse<-function(obs,pred){
+  sqrt(mean((obs-pred)^2))
+}
+
+##########
+# Like an R2 Coefficient of determination
+#https://stackoverflow.com/questions/40901445/function-to-calculate-r2-r-squared-in-r
+r2<-function(obs,pred){
+  cor(obs,pred)^2
+}
+
+```
+
+# RMSE across candidate models
+```{r, echo=FALSE,warning=FALSE,message=FALSE}
+###############
+## Apply to each of the column names
+#RMSE
+rmse_df = NULL
+for(i in colnames(pred_cv)){
+  rmse_df = rbind(rmse_df,data.frame(rmse(obs,pred_cv[[i]])))
+  }
+
+rmse_df<-rmse_df%>%
+  rename(RMSE=rmse.obs..pred_cv..i...)%>%
+  mutate(RMSE=round(RMSE,3))%>%
+  mutate(Models=colnames(pred_cv))%>%
+  relocate(Models,.before=RMSE)
+#for(i in colnames(pred_cv)){
+#  print(rmse(obs,pred_cv[[i]]))
+#}
+rmse_df
+
+write_csv(rmse_df,"C:/Users/efergus/SEMscenarios/Routput/Scenario_modeling/Candidate_models/XER_v3_RMSE_EPT.csv")
+```
+
+# R2
+```{r, echo=FALSE,warning=FALSE,message=FALSE}
+#################
+# R2 equivalent
+r2_df = NULL
+for(i in colnames(pred_cv)){
+  r2_df=rbind(r2_df,data.frame(r2(obs,pred_cv[[i]])))
+}
+
+r2_df<-r2_df%>%
+  rename(R2=r2.obs..pred_cv..i...)%>%
+  mutate(R2=round(R2,3))%>%
+  mutate(Models=colnames(pred_cv))%>%
+  relocate(Models,.before=R2)
+
+r2_df
+
+write_csv(r2_df,"C:/Users/efergus/SEMscenarios/Routput/Scenario_modeling/Candidate_models/XER_v3_R2_EPT.csv")
+```
+
+```{r, echo=FALSE,warning=FALSE,message=FALSE}
+##################################
+## Plot Observed vs. Predicted
+#  Note: Observed is more certain than predicted - so place Observed on y-axis
+# https://aosmith.rbind.io/2018/08/20/automating-exploratory-plots/
+
+# Loop through each of the predicted values from each candidate model
+model=names(predictions)[2:5]
+model=set_names(model)
+observed=names(predictions)[1]
+
+# Plotting function
+scatter_fun<-function(x,y){
+  ggplot(predictions, aes(x=.data[[x]],y=.data[[y]]))+
+    stat_poly_eq(mapping=use_label(c("eq")),size=3)+
+    geom_point()+
+    geom_abline(intercept=0,slope=1)+
+    #geom_smooth(method="lm",se=FALSE, color="grey74")+
+    theme_bw()+
+    xlab("Predicted")+
+    ylab("Observed")+
+    ggtitle(x)
+    #ggtitle(aes(.data[[x]]))
+}
+
+cand_plots<-map(model,~scatter_fun(.x,"obs"))
+
+cand_plots
+
+```
+
+
+

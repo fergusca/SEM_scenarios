@@ -1,0 +1,284 @@
+---
+title: "prediction_XER_OE_LNTL_v4"
+author: "C. Emi Fergus"
+date: "2023-10-26"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Scenario predictions using path analysis coefficients
+ Alan H suggested taking XERIC sites with poor TN (25%; TN > 529ug/L)
+  What would happen to these streams if you reduced TN at each site
+  by 10%, 20%, and/or 30%.  I think those are more realistic in terms of
+  what might actually be accomplished by some kind of nutrient controls or
+  BMPs in a watershed.
+
+```{r, echo=FALSE, message=FALSE, warning=FALSE}
+library(tidyverse)
+library(lavaan)
+library(dplyr)
+library(ggplot2)
+library(ggpmisc)
+library(ggpubr)
+library(broom)
+
+library(grid)
+library(gridExtra)
+
+library(kableExtra)
+library(knitr)
+library(stringr)
+
+devtools::load_all()
+library(SEMscenarios)
+```
+
+```{r,echo=FALSE, message=FALSE, warning=FALSE}
+# LOAD DATA
+##############
+## READ PROCESSED NRSA DATA USED IN MODEL
+# PROCESSED - all 0809 and only new sites from later surveys
+#  VISITS 1 and 2 n = 4578 w/ 321 vars
+dat_org<-read.csv("C:/Users/efergus/SEMscenarios/data_processed/Compiled/nrsa081318_nonresampled_VISIT_12.csv")
+
+# PROCESSED DATA VISIT_NO=1 ONLY n = 4389
+dat_proc<-dat_org%>%
+  filter(VISIT_NO==1)
+
+###############
+## PROCESS DATA DROPPING MISSING PROTOCOL
+dat_proc$PROTOCOL<-as.factor(dat_proc$PROTOCOL)
+
+# n = 4371
+dat_proc<- dat_proc%>%
+  drop_na(PROTOCOL)%>%
+  filter(PROTOCOL=="BOATABLE"|PROTOCOL=="WADEABLE")
+
+# DROP NOPHAB class from REALM
+dat_proc$PROTOCOL<-droplevels(dat_proc$PROTOCOL)
+
+#########################
+## SUBSET BY MANUAL ECOREGION
+# XER n = 342
+xer<-dat_proc%>%
+  filter(AG_ECO9=="XER")%>%
+  drop_na(LOE_QLow_cl)
+
+# SCALE CUMULATIVE PRECIPITATION in XER
+xer$PSUMPY_SY_WS_sc<-scale(xer$PSUMPY_SY_WS)
+
+# WADEABLE n = 200
+xer_w <- xer %>%
+  filter(PROTOCOL=="WADEABLE")
+
+# POOR TN SITES (TN > 529 ug/L or > -0.28) based on NRSA 13-14 report thresholds
+xer_mod<-xer_w%>%
+mutate(TN_class = case_when(
+  L_NTL > -0.28 ~ "TN_Poor",
+  L_NTL <= -0.28 ~ "other"))
+table(xer_mod$TN_class)
+
+#############
+## READ SEM OUTPUT PROCESSED W/COEFFICIENT LABELS UNSTANDARDIZED NON-BAYESIAN
+coef_proc<-read.csv("C:/Users/efergus/SEMscenarios/Routput/Scenario_modeling/SEM_output/XERw_m3_OE_coef_unstd.csv")
+
+# Grab label and coefficient estimate to call in equations
+coef_labels<-coef_proc[,3:4]
+# Widen table - make coefficient labels columns and estimates the row
+coef_use<-pivot_wider(coef_labels,names_from=coeff_name,values_from = est)#
+
+```
+
+## CREATE HYPOTHETICAL TN VALUES FOR NRSA SITES greater than reference
+```{r, echo=FALSE, message=FALSE, echo=FALSE}
+# SUBSET OF XER Sites with Poor TN
+# Decrease untransformed TN by 10%, 20%, and 30%
+xer_tn<-xer_mod%>%
+  filter(TN_class =="TN_Poor")%>%
+  mutate(NTL_s1 = NTL_RESULT-(NTL_RESULT*0.1))%>%
+  mutate(LNTL_s1 = log10(NTL_s1))%>%
+  mutate(NTL_s2=NTL_RESULT-(NTL_RESULT*0.2))%>%
+  mutate(LNTL_s2 = log10(NTL_s2))%>%
+  mutate(NTL_s3=NTL_RESULT-(NTL_RESULT*0.3))%>%
+  mutate(LNTL_s3 = log10(NTL_s3))
+
+head(xer_tn[,c(31,324,326,328)],10)
+
+```
+
+# Set scenario values and predict bug O/E
+
+Bug O/E ~ 1.18 + 0.06(LRBS_use) + -0.14(L_NTL) + -0.08(L_SULF) + 0.05(LOE_Qbkf_cl) + 0.04(dam) + 0.12(Specific strm pwr)
+
+```{r, echo=FALSE, message=FALSE, warning=FALSE}
+# SCENARIO 0 - OBSERVED TN
+L_NTL.predict.0 <- xer_tn$L_NTL
+tn.predict.0.raw<-xer_tn$NTL_RESULT
+
+#SCENARIO 1 - TN decrease by 10%
+L_NTL.predict.1 <- xer_tn$LNTL_s1
+tn.predict.1.raw<-xer_tn$NTL_s1
+
+#SCENARIO 2 - TN decrease by 20%
+L_NTL.predict.2 <- xer_tn$LNTL_s2
+tn.predict.2.raw<-xer_tn$NTL_s2
+
+#SCENARIO 3 - TN decrease by 30%
+L_NTL.predict.3 <- xer_tn$LNTL_s3
+tn.predict.3.raw<-xer_tn$NTL_s3
+
+# PREDICTED DISTRIBUTIONS FOR EXOGENOUS DRIVERS
+# VALUES IN DATASET
+urb.pred.1 <- xer_tn$asin_PCTURB_CAT
+dam.pred.1 <- xer_tn$L_NABD_NrmStorWs_ratio
+hag.pred.1 <- xer_tn$W1_HAG
+nohag.pred.1 <- xer_tn$W1_HNOAG
+rnat.pred.1 <- xer_tn$asin_PCTFORGRS_CATRP100
+precip.pred.1 <-xer_tn$PSUMPY_SY_WS_sc
+phdi.pred.1<-xer_tn$drought_mean
+
+# ENDOGENOUS DRIVERS BUT NOT ALTERED BY LFLOW
+strmpwr.pred.1 <- xer_tn$L_STRM_POWER
+xcmgw.pred.1 <- xer_tn$Lpt01_XCMGW
+loebflow.pred.1 <- xer_tn$LOE_Qbkf_cl
+loelflow.pred.1 <- xer_tn$LOE_QLow_cl
+rbs.pred.1 <- xer_tn$LRBS_use
+sulf.pred.1 <- xer_tn$L_SULF
+
+
+############
+# PREDICTED DISTRIBUTIONS FOR BENTHIC O/E
+# SCENARIO #0
+oe.predict.0 <- coef_use$b9.1 + coef_use$b9.2*rbs.pred.1 +
+  coef_use$b9.3*L_NTL.predict.0 + coef_use$b9.4*sulf.pred.1 +
+  coef_use$b9.5*loebflow.pred.1  + coef_use$b9.6*dam.pred.1 +
+  coef_use$b9.7*strmpwr.pred.1
+
+# SCENARIO #1
+oe.predict.1 <- coef_use$b9.1 + coef_use$b9.2*rbs.pred.1 +
+  coef_use$b9.3*L_NTL.predict.1 + coef_use$b9.4*sulf.pred.1 +
+  coef_use$b9.5*loebflow.pred.1  + coef_use$b9.6*dam.pred.1 +
+  coef_use$b9.7*strmpwr.pred.1
+
+# SCENARIO #2
+oe.predict.2 <- coef_use$b9.1 + coef_use$b9.2*rbs.pred.1 +
+  coef_use$b9.3*L_NTL.predict.2 + coef_use$b9.4*sulf.pred.1 +
+  coef_use$b9.5*loebflow.pred.1  + coef_use$b9.6*dam.pred.1 +
+  coef_use$b9.7*strmpwr.pred.1
+
+# SCENARIO #3
+oe.predict.3 <- coef_use$b9.1 + coef_use$b9.2*rbs.pred.1 +
+  coef_use$b9.3*L_NTL.predict.3 + coef_use$b9.4*sulf.pred.1 +
+  coef_use$b9.5*loebflow.pred.1  + coef_use$b9.6*dam.pred.1 +
+  coef_use$b9.7*strmpwr.pred.1
+```
+
+Create dataframes of predicted values
+```{r, echo=FALSE, warning=FALSE}
+#######################
+## CREATE DATAFRAMES OF PREDICTED VALUES
+scenario.0<-data.frame(L_NTL.predict.0,tn.predict.0.raw,
+                       oe.predict.0)
+scenario.1<-data.frame(L_NTL.predict.1,tn.predict.1.raw,
+                       oe.predict.1) #xfcnat.predict.1.raw,
+scenario.2<-data.frame(L_NTL.predict.2,tn.predict.2.raw,
+                       oe.predict.2)
+scenario.3<-data.frame(L_NTL.predict.3,tn.predict.3.raw,
+                       oe.predict.3)
+
+# ADD COLUMNS TO INDIVIDUAL SCENARIO DATASETS TO INDICATE WHICH SCENARIO THEY BELONG TO
+scenario.0<-scenario.0%>%
+  mutate(scenario=0)
+scenario.1<-scenario.1%>%
+  mutate(scenario=1)
+scenario.2<-scenario.2%>%
+  mutate(scenario=2)
+scenario.3<-scenario.3%>%
+  mutate(scenario=3)
+
+# change column names
+cols_names<-c("LNTL.predict",
+              "tn.predict.raw","oe.predict","scenario")
+names(scenario.0)<- cols_names
+names(scenario.1)<- cols_names
+names(scenario.2)<- cols_names
+names(scenario.3)<- cols_names
+
+# ROW BIND SCENARIOS ESTIMATES n = 348 obs
+scenario_all<-rbind(scenario.0,scenario.1,scenario.2,scenario.3) #,scenario.4
+scenario_all$scenario<-as.factor(scenario_all$scenario)
+
+```
+
+# Mean and Median predicted values
+```{r, echo=FALSE,warning=FALSE,message=FALSE}
+# Get group mean SCENARIO v1
+median_oe <- scenario_all%>%
+  #filter(!is.na(rbs.predict.1.raw))%>%
+  group_by(scenario)%>%
+  summarize(median_oe = median(oe.predict))
+median_tn <- scenario_all%>%
+  #filter(!is.na(rfor.pred.1.raw))%>%
+  group_by(scenario)%>%
+  summarize(median_tn = median(tn.predict.raw))
+
+# Mean predictoed
+mean_oe <- scenario_all%>%
+  group_by(scenario)%>%
+  summarize(mean_oe = mean(oe.predict))
+mean_tn <- scenario_all%>%
+  group_by(scenario)%>%
+  summarize(mean_tn = mean(tn.predict.raw))
+
+#Calculate difference in predicted O/E and baseline
+wide<-scenario_all%>%
+  select(scenario,oe.predict)%>%
+  pivot_wider(names_from = scenario, values_from = oe.predict)
+
+#df_diff<-wide%>%
+#  rename(SITE_ID=1)%>%
+#  rename(TN_class=2)%>%
+#  rename(scenario_1 = 3)%>%
+#  rename(scenario_2 = 4)%>%
+#  mutate(OE_pred12_diff = scenario_2 - scenario_1)
+
+```
+
+# Boxplots of predicted values
+```{r, echo=FALSE,warning=FALSE}
+####################
+## PREDICTED O/E BOXPLOTS
+## DENSTIY PLOTS OF PREDICTED VALUES
+mycols<- c("#a6611a","#dfc27d","#80cdc1","#018571")
+# # Delta symbol
+# https://stackoverflow.com/questions/27690729/greek-letters-symbols-and-line-breaks-inside-a-ggplot-legend-label
+dat_text <- data.frame(
+  label=c(paste("\u0394","O/E = 0.05"),paste("\u0394","O/E = 0")),
+  TN_class=factor(c("hi TN","other")),
+  x=c(0,1,2,3),
+  y=c(1.0,1.0,1,1),
+  scenario="1"
+)
+OE_pred_box <- ggplot(scenario_all, aes(x=scenario, y=oe.predict,fill=scenario))+
+  geom_boxplot()+
+  scale_fill_manual(values=mycols)+
+  geom_jitter(alpha=0.2)+
+  #facet_grid(cols=vars(AG_ECO9))+
+  theme(axis.text.x = element_text(angle=65, hjust=1,size=10),
+        axis.title.x = element_blank())+
+  xlab("Scenario")+
+  ylab("Predicted O/E")
+OE_pred_box
+
+#################
+## TABLE OF VALUES
+kable(median_oe, caption = "Median Predicted Bug O/E",digits=3)%>%
+  kable_styling()
+
+kable(mean_oe, caption = "Mean Predicted Bug O/E",digits=3)%>%
+  kable_styling()
+
+```

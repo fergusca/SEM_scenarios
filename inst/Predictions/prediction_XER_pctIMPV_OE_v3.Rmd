@@ -1,0 +1,631 @@
+---
+title: "prediction_XER_pctIMP_OE"
+author: "C. Emi Fergus"
+date: "2023-11-03"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+## % Impervious surface in watershed riparian buffer
+
+There are only nine sites in the Xeric ecoregion with % impervious surface in stream buffer > 5%. Most NRSA sites have less than 1% impervious surface in the riparian buffer. 
+
+But for those nine sites, we want to see how reducing % impervious surface would improve stream condition.
+
+For sites with impervious surface in riparian buffer, will create scenarios where impervious surface is reduced.
+
+```{r,echo=FALSE, warning=FALSE, message=FALSE}
+remove(list=ls())
+
+library(tidyverse)
+library(lavaan)
+library(dplyr)
+library(ggplot2)
+library(ggpmisc)
+library(ggpubr)
+library(broom)
+library(GGally)
+
+library(kableExtra)
+library(knitr)
+library(stringr)
+
+library(sf) # Simple Features works well with Tidyverse
+library(mapview)
+library(RColorBrewer)
+
+devtools::load_all()
+library(SEMscenarios)
+```
+
+
+```{r,echo=FALSE, warning=FALSE}
+##############
+## READ PROCESSED NRSA DATA USED IN MODEL
+# PROCESSED - all 0809 and only new sites from later surveys
+#  VISITS 1 and 2 n = 4578 w/ 321 vars
+dat_org<-read.csv("C:/Users/efergus/SEMscenarios/data_processed/Compiled/nrsa081318_nonresampled_VISIT_12.csv")
+
+
+# PROCESSED DATA VISIT_NO=1 ONLY n = 4389
+dat_proc<-dat_org%>%
+  filter(VISIT_NO==1)
+
+###############
+## PROCESS DATA DROPPING MISSING PROTOCOL
+dat_proc$PROTOCOL<-as.factor(dat_proc$PROTOCOL)
+
+# n = 4371
+dat_proc<- dat_proc%>%
+  drop_na(PROTOCOL)%>%
+  filter(PROTOCOL=="BOATABLE"|PROTOCOL=="WADEABLE")
+
+# DROP NOPHAB class from REALM
+dat_proc$PROTOCOL<-droplevels(dat_proc$PROTOCOL)
+
+# TRANSFORM IMPERVIOUS SURFACE (NLCD
+dat_proc<-dat_proc%>%
+  mutate(asin_PCTIMP_WS = asin(sqrt(PCTIMP_WS/100)),
+         asin_PCTIMP_WsRp100 = asin(sqrt(PCTIMP_WsRp100/100)),
+         asin_PCTIMP_CAT = asin(sqrt(PCTIMP_CAT/100)),
+         asin_PCTIMP_CATRP100 = asin(sqrt(PCTIMP_CATRP100/100)))
+
+#########################
+## SUBSET BY MANUAL ECOREGION
+# XER n = 342
+xer<-dat_proc%>%
+  filter(AG_ECO9=="XER")%>%
+  drop_na(LOE_QLow_cl)
+
+# SCALE CUMULATIVE PRECIPITATION in XER
+xer$PSUMPY_SY_WS_sc<-scale(xer$PSUMPY_SY_WS)
+
+# WADEABLE n = 200
+xer_w <- xer %>%
+  filter(PROTOCOL=="WADEABLE")
+
+
+#############
+## READ SEM OUTPUT PROCESSED W/COEFFICIENT LABELS UNSTANDARDIZED NON-BAYESIAN version 3
+coef_proc<-read.csv("C:/Users/efergus/SEMscenarios/Routput/Scenario_modeling/SEM_output/XERw_m3_OE_coef_unstd.csv")
+#head(coef_proc)
+
+# Grab label and coefficient estimate to call in equations
+test3<-coef_proc[,3:4]
+# Widen table - make coefficient labels columns and estimates the row
+coef_use<-pivot_wider(test3,names_from=coeff_name,values_from = est)#
+
+```
+
+
+## Examine Predicted vs Observed relationship for sites with impervious surface
+Based on coefficients from path analysis model, estimated what O/E values would be using the dataset the model was trained on. We can compare predicted and observed values to see how well the model fit.  
+```{r, echo=FALSE , warning=FALSE}
+##########################################
+###### EXAMINING OE PATH MODEL USING DATASET MODEL WAS TRAINED ON
+# Subset data % impervious >5% n = 9 sites
+xer_impv<-xer_w%>%
+  filter(PCTIMP_WsRp100>5)
+
+oe.sem.predict <- coef_use$b9.1 + coef_use$b9.2*xer_impv$LRBS_use + coef_use$b9.3*xer_impv$L_NTL +
+  coef_use$b9.4*xer_impv$L_SULF + coef_use$b9.5*xer_impv$LOE_Qbkf_cl + coef_use$b9.6*xer_impv$L_NABD_NrmStorWs_ratio +
+  coef_use$b9.7*xer_impv$L_STRM_POWER
+
+#  ADD PREDICTED VALUES TO XER subset
+xer_train_pred <- xer_impv%>%
+  mutate(OE_SCORE_pred=oe.sem.predict)
+
+xer_train_pred<-xer_train_pred%>%
+  mutate(resid_oe=OE_SCORE-OE_SCORE_pred)
+
+# RMSE - Calculate RMSE (sqrt(mean (obs-pred)^2))
+rmse_train_oe<-round(sqrt(mean(xer_train_pred$resid_oe)^2),3)
+rmse_oe_lab<-paste("RMSE =",rmse_train_oe)
+
+# COMPARE OBSERVED VS MLR PREDICTED (n=111)
+OE_corr_train<-ggplot(xer_train_pred,aes(x=OE_SCORE, y=OE_SCORE_pred))+ #PCTFOR_WsRp100
+  #stat_poly_line()+
+  #stat_poly_eq(use_label(c("eq","R2")))+
+  geom_point()+
+  geom_abline(intercept=0,slope=1)+
+  geom_text(x=0.7,y=0.97, label=rmse_oe_lab)+
+  xlim(0,1.5)+
+  ylim(0,1.5)+
+  xlab("Observed OE")+
+  ylab("Predicted OE")+
+  ggtitle("Predicted OE vs Observed with 1:1 line")
+OE_corr_train
+
+```
+
+For the nine sites with >5% impervious surface, predicted O/E is greater than observed. Suggests that there are other things impairing these sites that aren't well captured by the proximal drivers but may be associated with impervious surface (i.e., other pollutants).
+
+The RMSE is 0.16, indicating that average distance between the predicted O/E and observed O/E is 0.16 units. This difference seems like it would be problematic because a 16% loss in taxa richness might be important to the ecosystem.
+
+## SCENARIO % IMPERVIOUS SURFACE
+Reduce impervious surface for sites with values >5%
+Scenario 1: Reduce by 0%
+Scenario 2: Reduce by 5% (X% - 5%)
+Scenario 3: Reduce impervious surface by 50%
+
+Bug O/E ~ 1.18 + 0.06(LRBS_use) + -0.14(L_NTL) + -0.08(L_SULF) + 0.05(LOE_Qbkf_cl) + 0.04(dam) + 0.12(Specific strm pwr)
+
+```{r, echo=FALSE, message=FALSE, warning=FALSE}
+# CREATE HYPOTHETICAL % Impervious
+# Scenario where decrease impervious surface by 5 units
+xer_mod<-xer_impv%>%
+  mutate(asin_PCTIMP.s2  = asin_PCTIMP_WsRp100 - 0.225513)%>%
+  mutate(asin_PCTIMP.s2.raw  = (sin(asin_PCTIMP.s2 ))^2) %>%
+  mutate(asin_PCTIMP.s3 = asin_PCTIMP_WsRp100-(asin_PCTIMP_WsRp100*0.5))%>%
+  mutate(asin_PCTIMP.s3.raw = (sin(asin_PCTIMP.s3 ))^2)
+
+summary(xer_mod$asin_PCTIMP.s2.raw)
+summary(xer_mod$asin_PCTIMP.s3.raw)
+
+# SCENARIO 1 - OBSERVED Impervious
+asin_PCTIMP.predict.1 <- xer_mod$asin_PCTIMP_WsRp100
+asin_PCTIMP.predict.1.raw<-xer_mod$PCTIMP_WsRp100
+
+#SCENARIO 2 - Decrease Impervious by 5 units
+asin_PCTIMP.predict.2 <- xer_mod$asin_PCTIMP.s2
+asin_PCTIMP.predict.2.raw<-xer_mod$asin_PCTIMP.s2.raw
+
+# SCENARIO 3 - Decrease Impervious by 50%
+asin_PCTIMP.predict.3 <- xer_mod$asin_PCTIMP.s3
+asin_PCTIMP.predict.3.raw<-xer_mod$asin_PCTIMP.s3.raw
+
+# PREDICTED DISTRIBUTIONS FOR EXOGENOUS DRIVERS
+# VALUES IN DATASET
+#imp.pred.1 <- xer_mod$asin_PCTIMP_WsRp100
+dam.pred.1 <- xer_mod$L_NABD_NrmStorWs_ratio
+hag.pred.1 <- xer_mod$W1_HAG
+nohag.pred.1 <- xer_mod$W1_HNOAG
+rnat.pred.1 <- xer_mod$asin_PCTFORGRS_CATRP100
+precip.pred.1 <-xer_mod$PSUMPY_SY_WS_sc
+phdi.pred.1<-xer_mod$drought_mean
+
+# ENDOGENOUS DRIVERS BUT NOT ALTERED BY Impervious
+strmpwr.pred.1 <- xer_mod$L_STRM_POWER
+xcmgw.pred.1 <- xer_mod$Lpt01_XCMGW
+loebflow.pred.1 <- xer_mod$LOE_Qbkf_cl
+
+#############
+## DRIVERS OF O/E ALTERED by IMPERVIOUS
+# SCENARIO 1 - no change in impervious surface
+loelflow.predict.1 <-coef_use$b3.1 + coef_use$b3.2*asin_PCTIMP.predict.1 +
+  coef_use$b3.3*precip.pred.1 + coef_use$b3.4*dam.pred.1 + 
+  coef_use$b3.5*rnat.pred.1 + coef_use$b3.6*hag.pred.1 +
+  coef_use$b3.7*nohag.pred.1
+
+evap.predict.1 <- coef_use$b5.1 + coef_use$b5.2*loelflow.predict.1 +
+  coef_use$b5.3*loebflow.pred.1 +
+  coef_use$b5.4*precip.pred.1 + coef_use$b5.5*dam.pred.1 +
+  coef_use$b5.6*strmpwr.pred.1
+
+rbs.predict.1<- coef_use$b6.1 + coef_use$b6.2*asin_PCTIMP.predict.1 +
+  coef_use$b6.3*loelflow.predict.1 + coef_use$b6.4*loebflow.pred.1 +
+  coef_use$b6.5*hag.pred.1 + coef_use$b6.6*rnat.pred.1 +
+  coef_use$b6.7*precip.pred.1 + coef_use$b6.8*strmpwr.pred.1
+rbs.predict.1.raw<-10^rbs.predict.1
+
+tn.predict.1<- coef_use$b7.1 + coef_use$b7.2*asin_PCTIMP.predict.1 +
+  coef_use$b7.3*xcmgw.pred.1 + coef_use$b7.4*loelflow.predict.1 +
+  coef_use$b7.5*precip.pred.1
+tn.predict.1.raw<-10^tn.predict.1 -0.01
+  
+sulf.predict.1<- coef_use$b8.1 + coef_use$b8.2*asin_PCTIMP.predict.1+
+  coef_use$b8.3*evap.predict.1 + coef_use$b8.4*nohag.pred.1 +
+  coef_use$b8.5*rnat.pred.1 + coef_use$b8.6*loelflow.predict.1 +
+  coef_use$b8.7*precip.pred.1 + coef_use$b8.8*phdi.pred.1
+sulf.predict.1.raw<-10^sulf.predict.1
+
+
+oe.predict.1 <- coef_use$b9.1 + coef_use$b9.2*rbs.predict.1 +
+  coef_use$b9.3*tn.predict.1 + coef_use$b9.4*sulf.predict.1 +
+   coef_use$b9.5*loebflow.pred.1  + coef_use$b9.6*dam.pred.1 +
+  coef_use$b9.7*strmpwr.pred.1
+
+############
+# SCENARIO #2
+loelflow.predict.2 <-coef_use$b3.1 + coef_use$b3.2*asin_PCTIMP.predict.2 +
+  coef_use$b3.3*precip.pred.1 + coef_use$b3.4*dam.pred.1 + 
+  coef_use$b3.5*rnat.pred.1 + coef_use$b3.6*hag.pred.1 +
+  coef_use$b3.7*nohag.pred.1
+
+evap.predict.2 <- coef_use$b5.1 + coef_use$b5.2*loelflow.predict.2 +
+  coef_use$b5.3*loebflow.pred.1 +
+  coef_use$b5.4*precip.pred.1 + coef_use$b5.5*dam.pred.1 +
+  coef_use$b5.6*strmpwr.pred.1
+
+rbs.predict.2<- coef_use$b6.1 + coef_use$b6.2*asin_PCTIMP.predict.2 +
+  coef_use$b6.3*loelflow.predict.2 + coef_use$b6.4*loebflow.pred.1 +
+  coef_use$b6.5*hag.pred.1 + coef_use$b6.6*rnat.pred.1 +
+  coef_use$b6.7*precip.pred.1 + coef_use$b6.8*strmpwr.pred.1
+rbs.predict.2.raw<-10^rbs.predict.2
+
+tn.predict.2<- coef_use$b7.1 + coef_use$b7.2*asin_PCTIMP.predict.2 +
+  coef_use$b7.3*xcmgw.pred.1 + coef_use$b7.4*loelflow.predict.2 +
+  coef_use$b7.5*precip.pred.1
+tn.predict.2.raw<-10^tn.predict.2 -0.01
+  
+sulf.predict.2<- coef_use$b8.1 + coef_use$b8.2*asin_PCTIMP.predict.2+
+  coef_use$b8.3*evap.predict.2 + coef_use$b8.4*nohag.pred.1 +
+  coef_use$b8.5*rnat.pred.1 + coef_use$b8.6*loelflow.predict.2 +
+  coef_use$b8.7*precip.pred.1 + coef_use$b8.8*phdi.pred.1
+sulf.predict.2.raw<-10^sulf.predict.2
+
+oe.predict.2 <- coef_use$b9.1 + coef_use$b9.2*rbs.predict.2 +
+  coef_use$b9.3*tn.predict.2 + coef_use$b9.4*sulf.predict.2 +
+  coef_use$b9.5*loebflow.pred.1  + coef_use$b9.6*dam.pred.1 +
+  coef_use$b9.7*strmpwr.pred.1
+
+############
+# SCENARIO #3
+loelflow.predict.3 <-coef_use$b3.1 + coef_use$b3.2*asin_PCTIMP.predict.3 +
+  coef_use$b3.3*precip.pred.1 + coef_use$b3.4*dam.pred.1 + 
+  coef_use$b3.5*rnat.pred.1 + coef_use$b3.6*hag.pred.1 +
+  coef_use$b3.7*nohag.pred.1
+
+evap.predict.3 <- coef_use$b5.1 + coef_use$b5.2*loelflow.predict.3 +
+  coef_use$b5.3*loebflow.pred.1 +
+  coef_use$b5.4*precip.pred.1 + coef_use$b5.5*dam.pred.1 +
+  coef_use$b5.6*strmpwr.pred.1
+
+rbs.predict.3<- coef_use$b6.1 + coef_use$b6.2*asin_PCTIMP.predict.3 +
+  coef_use$b6.3*loelflow.predict.3 + coef_use$b6.4*loebflow.pred.1 +
+  coef_use$b6.5*hag.pred.1 + coef_use$b6.6*rnat.pred.1 +
+  coef_use$b6.7*precip.pred.1 + coef_use$b6.8*strmpwr.pred.1
+rbs.predict.3.raw<-10^rbs.predict.3
+
+tn.predict.3<- coef_use$b7.1 + coef_use$b7.2*asin_PCTIMP.predict.3 +
+  coef_use$b7.3*xcmgw.pred.1 + coef_use$b7.4*loelflow.predict.3 +
+  coef_use$b7.5*precip.pred.1
+tn.predict.3.raw<-10^tn.predict.3 -0.01
+  
+sulf.predict.3<- coef_use$b8.1 + coef_use$b8.2*asin_PCTIMP.predict.3+
+  coef_use$b8.3*evap.predict.3 + coef_use$b8.4*nohag.pred.1 +
+  coef_use$b8.5*rnat.pred.1 + coef_use$b8.6*loelflow.predict.3 +
+  coef_use$b8.7*precip.pred.1 + coef_use$b8.8*phdi.pred.1
+sulf.predict.3.raw<-10^sulf.predict.3
+
+oe.predict.3 <- coef_use$b9.1 + coef_use$b9.2*rbs.predict.3 +
+  coef_use$b9.3*tn.predict.3 + coef_use$b9.4*sulf.predict.3 +
+  coef_use$b9.5*loebflow.pred.1  + coef_use$b9.6*dam.pred.1 +
+  coef_use$b9.7*strmpwr.pred.1
+```
+
+
+Density distributions of predicted values under % Impervious surface scenarios
+```{r, echo=FALSE, message=FALSE, warning=FALSE}
+#######################
+## CREATE DATAFRAMES OF PREDICTED VALUES
+scenario.1<-data.frame(asin_PCTIMP.predict.1,asin_PCTIMP.predict.1.raw,
+                       loelflow.predict.1,
+                       rbs.predict.1,rbs.predict.1.raw, 
+                       tn.predict.1,tn.predict.1.raw,
+                       sulf.predict.1,sulf.predict.1.raw,
+                       oe.predict.1) #xfcnat.predict.1.raw,
+
+scenario.2<-data.frame(asin_PCTIMP.predict.2,asin_PCTIMP.predict.2.raw,
+                       loelflow.predict.2,
+                       rbs.predict.2,rbs.predict.2.raw, 
+                       tn.predict.2,tn.predict.2.raw,
+                       sulf.predict.2,sulf.predict.2.raw,
+                       oe.predict.2)
+
+scenario.3<-data.frame(asin_PCTIMP.predict.3,asin_PCTIMP.predict.3.raw,
+                       loelflow.predict.3,
+                       rbs.predict.3,rbs.predict.3.raw, 
+                       tn.predict.3,tn.predict.3.raw,
+                       sulf.predict.3,sulf.predict.3.raw,
+                       oe.predict.3)
+
+# ADD COLUMNS TO INDIVIDUAL SCENARIO DATASETS TO INDICATE WHICH SCENARIO THEY BELONG TO
+scenario.1<-scenario.1%>%
+  mutate(scenario=1)
+scenario.2<-scenario.2%>%
+  mutate(scenario=2)
+scenario.3<-scenario.3%>%
+  mutate(scenario=3)
+
+# change column names
+cols_names<-c("asin_PCTIMP.predict","PCTIMP.predict","LOElflow.predict",
+              "Lrbs.predict","Rbs.predict","Ltn.predict","tn.predict",
+              "Lsulf.predict","sulf.predict","oe.predict","scenario")
+names(scenario.1)<- cols_names
+names(scenario.2)<- cols_names
+names(scenario.3)<- cols_names
+
+# SCENARIOS GRP 1 - Decrease by 5 units
+scenario_all<-rbind(scenario.1,scenario.2,scenario.3) #,scenario.4
+scenario_all$scenario<-as.factor(scenario_all$scenario)
+
+
+
+####################
+## DENSTIY PLOTS OF PREDICTED VALUES
+library(ggplot2)
+#mycols <- c("#7570b3","#1b9e77","#d95f02","")
+mycols<- c("#d7191c","#fdae61","#2c7bb6") #light blue "#abd9e9",
+
+# Get group mean SCENARIO
+mu_oe <- scenario_all%>%
+  #filter(!is.na(rbs.predict.1.raw))%>%
+  group_by(scenario)%>%
+  summarize(mean_oe = mean(oe.predict))
+mu_tn <- scenario_all%>%
+  #filter(!is.na(rfor.pred.1.raw))%>%
+  group_by(scenario)%>%
+  summarize(mean_tn = mean(tn.predict))
+
+##################
+# PREDICTED O/E DISTRIBUTIONS
+dens_OE<-ggplot(scenario_all, aes(x=oe.predict, fill=scenario, colour=scenario))+
+  geom_density(alpha=0.3)+
+  scale_fill_manual(values=mycols)+
+  scale_color_manual(values=mycols)+
+  geom_vline(data=mu_oe, aes(xintercept=mean_oe, colour=scenario),
+             linetype="dashed")+
+  theme_bw()+
+  theme(plot.title = element_text(face="plain",size=11, hjust=0.5))+
+  ggtitle("Predicted O/E")+
+  xlab("Predicted O/E")+
+  theme(legend.position = "bottom")
+
+dens_OE
+
+# PREDICTED TN DISTRIBUTIONS - NEED TO BACKTRANSFORM
+dens_TN<-ggplot(scenario_all, aes(x=tn.predict, fill=scenario, colour=scenario))+
+  geom_density(alpha=0.3)+
+  scale_fill_manual(values=mycols)+
+  scale_color_manual(values=mycols)+
+  geom_vline(data=mu_tn, aes(xintercept=mean_tn, colour=scenario),
+             linetype="dashed")+
+  theme_bw()+
+  theme(plot.title = element_text(face="plain",size=11, hjust=0.5))+
+  ggtitle("Predicted TN")+
+  xlab("Predicted TN (mg/L)")+
+  theme(legend.position = "bottom")
+
+dens_TN
+
+```
+
+## SUBSET BY SITES WHERE IMPERVIOUS SURFACE CHANGED (Sites w/%IMPV > 5%)
+
+```{r, echo=FALSE, message=FALSE, warning=FALSE}
+########################
+## COMBINE PREDICTED WITH OBSERVED
+################
+## Combine scenario predictions with NRSA dataset reduced to sites 
+xer_mod_red<- xer_mod%>%
+  select(SITE_ID,VISIT_NO,YEAR,UNIQUE_ID,LAT_DD83,LON_DD83,RT_MASTER,
+         OE_SCORE,LOE_QLow_cl,LRBS_use,L_NTL,L_SULF,L_STRM_POWER,asin_PCTIMP_WsRp100,WGT_TP)
+xer_pred1<-cbind(xer_mod_red,scenario.1)
+xer_pred2<-cbind(xer_mod_red,scenario.2)
+xer_pred3<-cbind(xer_mod_red,scenario.3)
+
+# Calculate difference in predicted O/E and observed
+xer_pred1<- xer_pred1%>%
+  mutate(OE_SCORE_diff=oe.predict-OE_SCORE)
+xer_pred2<- xer_pred2%>%
+  mutate(OE_SCORE_diff=oe.predict-OE_SCORE)
+xer_pred3<- xer_pred3%>%
+  mutate(OE_SCORE_diff=oe.predict-OE_SCORE)
+
+xer_prediction<-rbind(xer_pred1,xer_pred2,xer_pred3)
+xer_prediction$scenario<- as.factor(xer_prediction$scenario)
+
+```
+
+
+## Calculate mean O/E by scenario
+
+```{r, echo=FALSE, message=FALSE, warning=FALSE}
+########################
+## Estimate mean values
+################
+df_impv<-xer_prediction%>%
+  group_by(scenario)%>%
+  summarise(mean_OE = mean(oe.predict))
+
+df_impv_median<-xer_prediction%>%
+  group_by(scenario)%>%
+  summarise(median_OE = median(oe.predict))
+
+kable(df_impv, caption = "Mean Predicted Bug O/E",digits=3)%>%
+  kable_styling()
+  
+```
+
+
+Boxplots of predicted O/E distributions
+
+```{r, echo=FALSE,message=FALSE,warning=FALSE}
+# Annotate text in boxplot indicating number of sites by TN class
+dat_text <- data.frame(
+  label=c(paste("\u0394","O/E = 0.108"),paste("\u0394","O/E = 0.087")),
+  x=c(2,3),
+  y=c(0.9),
+  scenario="1"
+)
+
+pred_OE_impv <- ggplot(xer_prediction, aes(x=scenario, y=oe.predict,fill=scenario))+ #weight = WGT_TP
+  geom_boxplot()+
+  scale_fill_manual(values=mycols)+
+  geom_jitter(alpha=0.1)+
+  geom_text(data=dat_text,
+            mapping=aes(x=x,y=y,label=label))+
+  #geom_text(x="1",y=1.25, aes(label=label),data=ann_text)+
+  theme(axis.text.x = element_text(angle=65, hjust=1,size=10),
+        axis.title.x = element_blank())+
+  xlab("Scenario")+
+  ylab("Predicted O/E")
+pred_OE_impv
+
+```
+
+## Population estimates
+
+See Dumelle et al. 2023 for tips using spsurvey package
+```{r,echo=FALSE,warning=FALSE,message=FALSE}
+library(spsurvey)
+
+# SCENARIO 1 n=135 - sites with TN greater than GOod/Fair condition
+xer_prediction_s1<-xer_prediction%>%
+  filter(scenario=="1")%>%
+  filter(!is.na(WGT_TP))
+
+# Convert dataframe to a simple features (sf) object
+# https://stackoverflow.com/questions/29736577/how-to-convert-data-frame-to-spatial-coordinates/45484314#45484314
+xer_pred_s1_sf <- st_as_sf(x=xer_prediction_s1,
+                           coords=c("LON_DD83","LAT_DD83"),
+                           crs=4269) # Albers equal area EPSG = 5070
+
+cont_est_s1 <-cont_analysis(
+  xer_pred_s1_sf,
+  siteID = "SITE_ID",
+  vars="oe.predict",
+  weight="WGT_TP"
+)
+
+# Mean estimates of Scenario 1 predicted O/E
+cont_est_s1$Mean
+# Estimate of oe.predict for scenario 1 = 0.54
+
+# CDF estimates
+#plot(cont_est_s1$CDF)
+
+# Scenario 2
+xer_prediction_s2<-xer_prediction%>%
+  filter(scenario=="2")%>%
+  filter(!is.na(WGT_TP))
+
+xer_pred_s2_sf <- st_as_sf(x=xer_prediction_s2,
+                           coords=c("LON_DD83","LAT_DD83"),
+                           crs=4269) # Albers equal area EPSG = 5070
+
+cont_est_s2 <-cont_analysis(
+  xer_pred_s2_sf,
+  siteID = "SITE_ID",
+  vars="oe.predict",
+  weight="WGT_TP"
+)
+
+# Mean estimates of Scenario 2 predicted O/E
+cont_est_s2$Mean
+# Estimate of oe.predict for scenario 2 = 0.646
+
+
+## Scenario 3
+xer_prediction_s3<-xer_prediction%>%
+  filter(scenario=="3")%>%
+  filter(!is.na(WGT_TP))
+
+xer_pred_s3_sf <- st_as_sf(x=xer_prediction_s3,
+                           coords=c("LON_DD83","LAT_DD83"),
+                           crs=4269) # Albers equal area EPSG = 5070
+
+cont_est_s3 <-cont_analysis(
+  xer_pred_s3_sf,
+  siteID = "SITE_ID",
+  vars="oe.predict",
+  weight="WGT_TP"
+)
+
+# Mean estimates of Scenario 3 predicted O/E
+cont_est_s3$Mean
+
+
+#################
+## COMBINE CDF dataframes
+s1_cdf<-cont_est_s1$CDF%>%
+  mutate(scenario="scenario_1")
+
+s2_cdf<-cont_est_s2$CDF%>%
+  mutate(scenario="scenario_2")
+
+s3_cdf<-cont_est_s3$CDF%>%
+  mutate(scenario="scenario_3")
+
+cdf_all_highTN <- rbind(s1_cdf,s2_cdf,s3_cdf)
+
+# CDF for WMT & XER
+oe_cdf<-ggplot(cdf_all_highTN, aes(x=Value))+
+  stat_ecdf(aes(color=scenario),
+            geom="step", size=1.5)+
+  theme(legend.position="bottom")+
+  xlab("O/E predicted")+
+  ggtitle("XER population O/E \nscenario reduce % impervious surface by 5 units")
+
+oe_cdf
+
+# PRINT CDF
+#tiff(filename="C:/Users/efergus/SEMNRSA/inst/analysis_prediction/Routput/F#igures/Population_OE_scenario_v5_2023_1103.tiff",
+#     width=5, height=4, units="in", res=200)
+#oe_cdf
+#dev.off()
+```
+
+
+Estimate population of Xeric sites in % impervious surface classes
+
+```{r,echo=FALSE,message=FALSE,warning=FALSE}
+
+# Create class of impervious surface
+xer_w_red<-xer_w%>%
+  mutate(impv_class = case_when(
+    asin_PCTIMP_WsRp100 >0.225513 ~ ">5% impervious",
+    asin_PCTIMP_WsRp100 <=0.225513 ~ "<5% impervious"))%>%
+  filter(!is.na(WGT_TP))
+table(xer_w_red$impv_class)
+
+xer_w_sf <- st_as_sf(x=xer_w_red,
+                           coords=c("LON_DD83","LAT_DD83"),
+                           crs=4269) # Albers equal area EPSG = 5070
+
+#################
+## ESTIMATE POPULATION OF XER STREAMS BY IMpervious CLASS
+
+cat_ests <- cat_analysis(
+  xer_w_sf,
+  siteID = "SITE_ID",
+  vars = "impv_class",
+  weight = "WGT_TP"
+)
+cat_ests
+# Is this % stream km in the XER by impervious surface class?
+cat_ests_red<-cat_ests%>%
+  filter(Category %in% c(">5% impervious","<5% impervious"))
+
+cat_ests_red$Category<-ordered(cat_ests_red$Category, levels=c("<5% impervious",">5% impervious"))
+
+col_palette <-c("#91bfdb","#ffffbf") #"#fc8d59"
+#Set font
+windowsFonts(AR=windowsFont("Arial"))
+
+XER_impv_class<-ggplot(cat_ests_red, aes(x=Category, y=Estimate.P,fill=Category))+
+  geom_bar(stat="identity",position = position_dodge())+
+  geom_errorbar(aes(ymax=Estimate.P + MarginofError.P,ymin=Estimate.P -MarginofError.P ),
+                width=0.2)+
+  scale_fill_manual(values=col_palette)+
+  geom_text(aes(label=paste0(round(Estimate.P,0),"%")),vjust=-0.2)+
+  #theme_bw(base_size=12)+
+  theme(plot.title = element_text(family = "AR",face="plain",size=14, hjust=0.5),
+        axis.text.x = element_text(family = "AR", angle=45, hjust=1,size=12),#, colour=c(rep("#8c510a",3),rep("#bf812d",1),rep("#dfc27d",3),rep("#c7eae5",2),rep("#80cdc1",1),rep("#c7eae5",1),rep("#35978f",2),rep("#01665e",1))),
+        axis.text.y = element_text(family = "AR", size=12),
+        axis.title.y = element_text(family="AR"), #element_blank(),#
+        strip.text.x = element_text(family="AR", size=12),
+        panel.grid.major =  element_line(colour = NA),
+        panel.grid.minor=element_line(colour = NA))+
+  xlab("")+
+  ylab("% of Stream length")+
+  ggtitle("Xeric impervious surface class") +
+  coord_flip()
+XER_impv_class
+
+
+```
+

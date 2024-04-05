@@ -1,0 +1,533 @@
+---
+title: "Candidate model (v3) comparisons for XER OE,MMI,EPT"
+author: "C. Emi Fergus"
+date: "2024-01-31"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+```{r, echo=FALSE,warning=FALSE,message=FALSE}
+library(tidyverse)
+library(sf)
+library(spmodel)
+library(lavaan)
+library(semPlot)
+
+library(ranger)
+library(ggpmisc) # for lm equation
+library(ggpubr)
+library(dotwhisker)
+library(knitr)
+devtools::load_all()
+library(SEMscenarios)
+```
+
+## Candidate model evaluation for macroinvertebrate O/E, MMI, and EPT 
+We are interested in comparing sets of candidate models for each of the macroinvertebrate response variables (OE, MMI, EPT) separately. Candidate models included multiple linear regression, spatial linear regression, structural equation model, random forest, and random forest with spatial residuals. We evaluate candidate model predictive performance using RMSE (lower is better) and psuedo R2 values using 10-fold cross validation, and examined model coefficients (for only mlr, spatial model, & SEM).
+
+```{r, echo=FALSE,warning=FALSE,message=FALSE}
+#########################
+# LOAD DATA
+# Processed NRSA data - all 0809 and only new sites from later surveys
+#  VISITS 1 and 2 n = 4578 w/ 321 vars
+dat_org<-read.csv("C:/Users/efergus/SEMscenarios/data_processed/Compiled/nrsa081318_nonresampled_VISIT_12.csv")
+
+# PROCESSED DATA VISIT_NO=1 WADEABLE n = 2736
+dat_proc<-dat_org%>%
+  filter(VISIT_NO==1)%>%
+  mutate(PROTOCOL=as.factor(PROTOCOL))%>%
+  drop_na(PROTOCOL)%>%
+  filter(PROTOCOL=="WADEABLE")
+
+# TRANSFORM IMPERVIOUS SURFACE; DROP MISSING QLOW n = 2584
+dat_proc<-dat_proc%>%
+  mutate(asin_PCTIMP_WS = asin(sqrt(PCTIMP_WS/100)),
+         asin_PCTIMP_WsRp100 = asin(sqrt(PCTIMP_WsRp100/100)),
+         asin_PCTIMP_CAT = asin(sqrt(PCTIMP_CAT/100)),
+         asin_PCTIMP_CATRP100 = asin(sqrt(PCTIMP_CATRP100/100)))%>%
+  mutate(L_OE_SCORE = log10(OE_SCORE+0.01))%>%
+  drop_na(LOE_QLow_cl)%>%
+  drop_na(OE_SCORE)%>%
+  mutate(PSUMPY_SY_WS_sc=scale(PSUMPY_SY_WS))
+
+
+##########
+# XERIC n = 271 observations per unique site in NRSA surveys (08/09 + 13/14 + 18/19)
+xer_org<-dat_proc%>%
+  filter(AG_ECO9=="XER")
+
+```
+
+```{r, echo=FALSE,warning=FALSE,message=FALSE}
+#########################
+## CANDIDATE MODEL COMPARISONS BY MACROINVERTEBRATE RESPONSE
+# LOAD Candidate model comparison parameters: RMSE and R2
+
+# RMSE
+rmse_oe<-read_csv("C:/Users/efergus/SEMscenarios/Routput/Scenario_modeling/Candidate_models/XER_v3_RMSE_OE.csv")
+
+rmse_oe<-rmse_oe%>%
+  filter(!Models=="sp_gamma")%>%
+  filter(!Models=="sp_invgaus")%>%
+  rename(OE=RMSE)
+
+rmse_mmi<-read_csv("C:/Users/efergus/SEMscenarios/Routput/Scenario_modeling/Candidate_models/XER_v3_RMSE_MMI.csv")
+rmse_ept<-read_csv("C:/Users/efergus/SEMscenarios/Routput/Scenario_modeling/Candidate_models/XER_v3_RMSE_EPT.csv")
+
+rmse_mmi<-rmse_mmi%>%
+  rename(MMI=RMSE)
+
+rmse_ept<-rmse_ept%>%
+  rename(EPT=RMSE)
+
+rmse_part<-left_join(rmse_oe,rmse_mmi,join_by(Models))
+rmse_all<-left_join(rmse_part,rmse_ept,join_by(Models))
+
+knitr::kable(rmse_all, digits=3,caption="RMSE of candidate models")
+
+############
+# R2
+r2_oe<-read_csv("C:/Users/efergus/SEMscenarios/Routput/Scenario_modeling/Candidate_models/XER_v3_R2_OE.csv")
+
+r2_oe<-r2_oe%>%
+  filter(!Models=="sp_gamma")%>%
+  filter(!Models=="sp_invgaus")%>%
+  rename(OE=R2)
+
+r2_mmi<-read_csv("C:/Users/efergus/SEMscenarios/Routput/Scenario_modeling/Candidate_models/XER_v3_R2_MMI.csv")
+r2_ept<-read_csv("C:/Users/efergus/SEMscenarios/Routput/Scenario_modeling/Candidate_models/XER_v3_R2_EPT.csv")
+
+r2_mmi<-r2_mmi%>%
+  rename(MMI=R2)
+
+r2_ept<-r2_ept%>%
+  rename(EPT=R2)
+
+r2_part<-left_join(r2_oe,r2_mmi,join_by(Models))
+r2_all<-left_join(r2_part,r2_ept,join_by(Models))
+
+knitr::kable(r2_all, digits=2, caption="R2 of candidate models")
+
+```
+
+## Compare model prediction uncertainties
+```{r,echo=FALSE, warning=FALSE,message=FALSE}
+# https://stackoverflow.com/questions/38109501/how-does-predict-lm-compute-confidence-interval-and-prediction-interval
+# Compare predictive estimates and standard error for MLR, spatial, and SEM
+# Multiple linear regression (non-spatial)
+ # mlr.oe <-lm(OE_SCORE~., data=train_red)# use all variables in subset except log OE
+ # summary(mlr.oe)
+
+
+  # Predict O/E using MLR model
+ # pred.mlr<-predict(mlr.oe, test_red)
+
+## STRUCTURAL EQUATION MODEL PREDICTION
+  ## USING lavPredictY
+  # PATH ANLAYSIS MODEL v3
+mymodel_v3_OE <- '
+Lpt01_XCMGW ~ 1 + ha3*W1_HAG + na2*W1_HNOAG + d2*L_NABD_NrmStorWs_ratio + sp3*L_STRM_POWER + p3*PSUMPY_SY_WS_sc
+L_STRM_POWER ~ 1 + d3*L_NABD_NrmStorWs_ratio + ha6*W1_HAG + rn4*asin_PCTFORGRS_CATRP100
+LOE_QLow_cl~ 1 + i5*asin_PCTIMP_WsRp100 + p8*PSUMPY_SY_WS_sc + d5*L_NABD_NrmStorWs_ratio + rn5*asin_PCTFORGRS_CATRP100 + ha5*W1_HAG + na4*W1_HNOAG
+LOE_Qbkf_cl ~ 1 + p7*PSUMPY_SY_WS_sc + d4*L_NABD_NrmStorWs_ratio + ha4*W1_HAG + ph3*drought_mean
+evap_index_sc ~ 1 + l5*LOE_QLow_cl + b3*LOE_Qbkf_cl + p6*PSUMPY_SY_WS_sc + d6*L_NABD_NrmStorWs_ratio + sp4*L_STRM_POWER
+LRBS_use ~ 1 + i2*asin_PCTIMP_WsRp100 + l2*LOE_QLow_cl + b2*LOE_Qbkf_cl + ha2*W1_HAG + rn2*asin_PCTFORGRS_CATRP100 + p2*PSUMPY_SY_WS_sc + sp2*L_STRM_POWER
+L_NTL ~ 1 + i3*asin_PCTIMP_WsRp100 + x2*Lpt01_XCMGW + l3*LOE_QLow_cl + p4*PSUMPY_SY_WS_sc
+L_SULF ~  1 + i4*asin_PCTIMP_WsRp100 + e2*evap_index_sc + na3*W1_HNOAG + rn3*asin_PCTFORGRS_CATRP100 + l4*LOE_QLow_cl + p5*PSUMPY_SY_WS_sc + ph2*drought_mean
+
+OE_SCORE ~ 1 + r1*LRBS_use + n1*L_NTL + su1*L_SULF + boe1*LOE_Qbkf_cl + d1*L_NABD_NrmStorWs_ratio + sp1*L_STRM_POWER
+
+# Covariance
+LOE_QLow_cl~~LOE_Qbkf_cl
+L_STRM_POWER~~LOE_QLow_cl
+L_SULF~~L_NTL
+
+'
+
+  # ROBUST ESTIMATION MAX LIKELIHOOD METHOD
+fit<- sem(mymodel_v3_OE, data=xer_org,
+            estimator="MLM")
+
+#lavaan output https://lavaan.ugent.be/tutorial/inspect.html
+#fitMeasures(fit)
+  
+# PREDICT Using lavPredictY - specify variables to include
+xvars<-c("PSUMPY_SY_WS_sc","drought_mean","LRBS_use","L_NTL","L_SULF","LOE_Qbkf_cl","LOE_QLow_cl","W1_HAG","W1_HNOAG","asin_PCTIMP_WsRp100","L_NABD_NrmStorWs_ratio","L_STRM_POWER","evap_index_sc","asin_PCTFORGRS_CATRP100","Lpt01_XCMGW")
+
+  ###########
+  # SEM: PREDICT Y-VALUES
+pred.sem<-lavPredictY(fit,ynames="OE_SCORE",xnames=xvars,newdata = xer_org)
+
+semPaths(fit, title=FALSE, intercepts = FALSE, residuals =FALSE)
+```
+
+```{r echo=FALSE,message=FALSE,warning=FALSE}
+
+xnames<-xvars
+ynames<-c("OE_SCORE","L_NTL","L_SULF","LRBS_use")
+
+# Lets look at components that are used in the predicty function
+# Returns the model-implied fitted covariance matrix
+Sxx<-fitted(fit)$cov[xnames, xnames]
+Sxy = fitted(fit)$cov[xnames, ynames]
+# Returns the mean values
+mx = fitted(fit)$mean[xnames]
+my = fitted(fit)$mean[ynames]
+
+# Create matrix of x variables
+Xtest = as.matrix(xer_org[,xnames])
+# Center x variables by their mean
+Xtest = scale(Xtest, center=mx, scale=FALSE) # center x values by subtracting from mean?
+
+# Predicted y values based on mean of y + centered x variables times the variance covariance matrix *  
+yhat = matrix(my, nrow=nrow(Xtest),ncol=length(ynames), byrow=TRUE) +
+  Xtest %*% solve(Sxx) %*% Sxy
+
+# Make predictions using the de Rooij function
+# https://github.com/mjderooij/SEMpredict/blob/main/predicty.lavaan.R
+pred.org <-predicty(fit,newdata=xer_org,xnames=xnames,ynames=ynames)
+head(pred.org)
+pred.org<-as.data.frame(pred.org)%>%
+  remove_rownames() %>% #https://tibble.tidyverse.org/reference/rownames.html
+  rename(rooij=OE_SCORE)
+pred.OE<-as.data.frame(cbind(pred.sem,pred.org))%>%
+  rename(lavaan=OE_SCORE)
+
+# Check if values match
+pred.OE <- pred.OE%>%
+  mutate(check=ifelse(round(lavaan,3) == round(rooij,3), 'yes','no'))
+
+not_match<-pred.OE%>%
+  filter(check=='no')
+# The values match using the different SEM prediction functions - which may be similar under the hood
+
+```
+
+
+## MLR without interaction terms 
+```{r,echo=FALSE,warning=FALSE,message=FALSE}
+myvars<- c("PSUMPY_SY_WS_sc", "drought_mean",
+           "asin_PCTIMP_WsRp100","L_NABD_NrmStorWs_ratio",
+           "L_STRM_POWER","LOE_QLow_cl","LOE_Qbkf_cl","evap_index_sc",
+           "W1_HAG","W1_HNOAG","asin_PCTFORGRS_CATRP100",
+           "Lpt01_XCMGW","LRBS_use","L_NTL","L_SULF","OE_SCORE")
+xer_red<-xer_org%>%
+  select(all_of(myvars))
+summary(lm(OE_SCORE~., data= xer_red))
+
+
+```
+
+
+## MLR with interaction terms
+Included interactions between impervious surface and TN, SO4, and summer flow
+```{r,echo=FALSE,warning=FALSE,message=FALSE}
+summary(lm(OE_SCORE~PSUMPY_SY_WS_sc+drought_mean+
+                  asin_PCTIMP_WsRp100+L_NABD_NrmStorWs_ratio+
+                  L_STRM_POWER+LOE_QLow_cl+LOE_Qbkf_cl+evap_index_sc+
+                  W1_HAG+W1_HNOAG+asin_PCTFORGRS_CATRP100+
+                  Lpt01_XCMGW+LRBS_use+L_NTL+L_SULF+asin_PCTIMP_WsRp100*LOE_QLow_cl+
+                    asin_PCTIMP_WsRp100*L_NTL+asin_PCTIMP_WsRp100*L_SULF, data= xer_org))
+
+```
+
+
+## Dotplots of standardized coefficients
+```{r, echo=FALSE,warning=FALSE,message=FALSE}
+#########################
+# Dot whisker plot of regression coefficients https://cran.r-project.org/web/packages/dotwhisker/vignettes/dotwhisker-vignette.html
+
+## MACROINVERTEBRATE O/E
+# Multiple linear regression (non-spatial)
+# REDUCE VARIABLES TO INCLUDE IN MODEL
+
+m1 <- xer_red %>%
+  do(broom::tidy(lm(OE_SCORE~., data= xer_red))) %>% # Will "tidy" lm coefficient output into a tibble
+  #rename(model=am)%>%
+  relabel_predictors(c(asin_PCTIMP_WsRp100="Impervious Rp",L_NABD_NrmStorWs_ratio="Dam",
+                       PSUMPY_SY_WS_sc="Precipitation",Tmax8110Ws="Max Temp",drought_mean="Drought index",
+                       LOE_Qbkf_cl="OE Bankfull flow",LOE_QLow_cl="OE Summer flow",evap_index_sc="Evaporation indicator",
+                       L_STRM_POWER="Specific strm power",W1_HAG="Agr index Rp", W1_HNOAG="Non-agr index Rp",
+                       asin_PCTFORGRS_CATRP100="ForestGrass Rp",Lpt01_XCMGW="Riparian cover",
+                       LRBS_use="Bed stability",L_NTL="TN",L_SULF="Sulfate"))%>%
+  mutate(model="Multiple reg")
+
+#m1
+
+#################
+# SPATIAL MODEL
+# Make a simple features object
+xer_sf <- st_as_sf(x=xer_org,
+                   coords=c("LON_DD83","LAT_DD83"),
+                   crs=4269)%>%
+  st_transform(crs=5070)# Albers equal area EPSG = 5070 - need to project to a coordinate system where x and y units are on same scale
+
+##########
+# Spatial GLM Gaussian distribution and exponential covariance structure
+m2<- xer_sf%>%
+  do(broom::tidy(splm(OE_SCORE~ PSUMPY_SY_WS_sc+drought_mean+
+                  asin_PCTIMP_WsRp100+L_NABD_NrmStorWs_ratio+
+                  L_STRM_POWER+LOE_QLow_cl+LOE_Qbkf_cl+evap_index_sc+
+                  W1_HAG+W1_HNOAG+asin_PCTFORGRS_CATRP100+
+                  Lpt01_XCMGW+LRBS_use+L_NTL+L_SULF,
+                xer_sf, spcov_type="exponential")))%>%
+  relabel_predictors(c(asin_PCTIMP_WsRp100="Impervious Rp",L_NABD_NrmStorWs_ratio="Dam",
+                       PSUMPY_SY_WS_sc="Precipitation",Tmax8110Ws="Max Temp",drought_mean="Drought index",
+                       LOE_Qbkf_cl="OE Bankfull flow",LOE_QLow_cl="OE Summer flow",evap_index_sc="Evaporation indicator",
+                       L_STRM_POWER="Specific strm power",W1_HAG="Agr index Rp", W1_HNOAG="Non-agr index Rp",
+                       asin_PCTFORGRS_CATRP100="ForestGrass Rp",Lpt01_XCMGW="Riparian cover",
+                       LRBS_use="Bed stability",L_NTL="TN",L_SULF="Sulfate"))%>%
+  mutate(model="Spatial")
+#m2
+
+#########################
+## STRUCTURAL EQUATION MODEL
+# READ IN SEM bootstrap OE Model
+sem_oe<-read.csv("C:/Users/EFergus/OneDrive - Environmental Protection Agency (EPA)/a_NLA_OE_project/Project_repository/Routput/Scenario_modeling/SEM_output/XERw_m3_OE_CI.csv")
+# Modify SEM output to get dotplot
+m3<- sem_oe%>%
+  filter(str_detect(label,"_tot"))%>%
+  rename(term=label,
+         estimate=est.std,
+         std.error=se,
+         conf.low= ci.lower,
+         conf.high=ci.upper,
+         statistic=z,
+         p.value=pvalue)%>%
+  mutate(term = recode_factor(term, imp_tot="Impervious Rp",dam_tot="Dam",
+                              precip_tot="Precipitation",phdi_tot="Drought index",
+                              oebflow_tot="OE Bankfull flow",oelflow_tot="OE Summer flow",dexcess_tot="Evaporation indicator",
+                              strpwr_tot="Specific strm power",
+                              hag_tot="Agr index Rp", nhag_tot="Non-agr index Rp",rnat_tot="ForestGrass Rp",
+                              xcmgw_tot="Riparian cover",rbs_tot="Bed stability", tn_tot="TN", sulf_tot="Sulfate"))%>%
+
+  mutate(model="SEM")%>%
+  select(term,estimate,std.error,statistic,p.value,model)
+
+#m3
+
+###############
+## MLR with interactions
+##
+m4 <- xer_org %>%
+  do(broom::tidy(lm(OE_SCORE~PSUMPY_SY_WS_sc+drought_mean+
+                  asin_PCTIMP_WsRp100+L_NABD_NrmStorWs_ratio+
+                  L_STRM_POWER+LOE_QLow_cl+LOE_Qbkf_cl+evap_index_sc+
+                  W1_HAG+W1_HNOAG+asin_PCTFORGRS_CATRP100+
+                  Lpt01_XCMGW+LRBS_use+L_NTL+L_SULF+asin_PCTIMP_WsRp100*LOE_QLow_cl+
+                    asin_PCTIMP_WsRp100*L_NTL+asin_PCTIMP_WsRp100*L_SULF, data= xer_org))) %>% # Will "tidy" lm coefficient output into a tibble
+  #rename(model=am)%>%
+  relabel_predictors(c(asin_PCTIMP_WsRp100="Impervious Rp",L_NABD_NrmStorWs_ratio="Dam",
+                       PSUMPY_SY_WS_sc="Precipitation",Tmax8110Ws="Max Temp",drought_mean="Drought index",
+                       LOE_Qbkf_cl="OE Bankfull flow",LOE_QLow_cl="OE Summer flow",evap_index_sc="Evaporation indicator",
+                       L_STRM_POWER="Specific strm power",W1_HAG="Agr index Rp", W1_HNOAG="Non-agr index Rp",
+                       asin_PCTFORGRS_CATRP100="ForestGrass Rp",Lpt01_XCMGW="Riparian cover",
+                       LRBS_use="Bed stability",L_NTL="TN",L_SULF="Sulfate"))%>%
+  mutate(model="MLR w/interaction")
+#m4
+
+
+#######################
+# Bring OE model output together
+m_set<-rbind(m1, m2,m3,m4)
+coeff_dotplot<-dwplot(m_set)+
+  theme_bw()+
+  ggtitle("Std. model coeff: XER wade O/E")
+
+coeff_dotplot
+#dwplot(m_set,style="distribution") # Looks crazy because very high peaks for SEM
+
+# PRINT Coefficient Dot and whisker plot
+# OE WEST
+tiff(filename="C:/Users/EFergus/OneDrive - Environmental Protection Agency (EPA)/a_NLA_OE_project/Project_repository/Routput/Scenario_modeling/Figures/Dot_whisker_XER_OE.tiff",
+     width=5, height = 6, units="in", res=200)
+coeff_dotplot
+dev.off()
+
+```
+
+
+```{r, echo=FALSE,warning=FALSE,message=FALSE}
+###############################
+### MMI
+#########################
+# Multiple linear regression (non-spatial)
+m1_mmi <- xer_red %>%
+  do(broom::tidy(lm(MMI_BENT_sc~ PSUMPY_SY_WS_sc+drought_mean+
+                      asin_PCTIMP_WsRp100+L_NABD_NrmStorWs_ratio+
+                      L_STRM_POWER+LOE_QLow_cl+LOE_Qbkf_cl+evap_index_sc+
+                      W1_HAG+W1_HNOAG+asin_PCTFORGRS_CATRP100+
+                      Lpt01_XCMGW+LRBS_use+L_NTL+L_SULF, data= xer_org))) %>% # Will "tidy" lm coefficient output into a tibble
+  #rename(model=am)%>%
+  relabel_predictors(c(asin_PCTIMP_WsRp100="Impervious Rp",L_NABD_NrmStorWs_ratio="Dam",
+                       PSUMPY_SY_WS_sc="Precipitation",Tmax8110Ws="Max Temp",drought_mean="Drought index",
+                       LOE_Qbkf_cl="OE Bankfull flow",LOE_QLow_cl="OE Summer flow",evap_index_sc="Evaporation indicator",
+                       L_STRM_POWER="Specific strm power",W1_HAG="Agr index Rp", W1_HNOAG="Non-agr index Rp",
+                       asin_PCTFORGRS_CATRP100="ForestGrass Rp",Lpt01_XCMGW="Riparian cover",
+                       LRBS_use="Bed stability",L_NTL="TN",L_SULF="Sulfate"))%>%
+  mutate(model="Multiple reg")
+
+#m1_mmi
+
+#################
+# SPATIAL MODEL
+
+##########
+# Spatial GLM Gaussian distribution and exponential covariance structure
+m2_mmi<- xer_sf%>%
+  do(broom::tidy(splm(MMI_BENT_sc~ PSUMPY_SY_WS_sc+drought_mean+
+                        asin_PCTIMP_WsRp100+L_NABD_NrmStorWs_ratio+
+                        L_STRM_POWER+LOE_QLow_cl+LOE_Qbkf_cl+evap_index_sc+
+                        W1_HAG+W1_HNOAG+asin_PCTFORGRS_CATRP100+
+                        Lpt01_XCMGW+LRBS_use+L_NTL+L_SULF,
+                      xer_sf, spcov_type="exponential")))%>%
+  relabel_predictors(c(asin_PCTIMP_WsRp100="Impervious Rp",L_NABD_NrmStorWs_ratio="Dam",
+                       PSUMPY_SY_WS_sc="Precipitation",Tmax8110Ws="Max Temp",drought_mean="Drought index",
+                       LOE_Qbkf_cl="OE Bankfull flow",LOE_QLow_cl="OE Summer flow",evap_index_sc="Evaporation indicator",
+                       L_STRM_POWER="Specific strm power",W1_HAG="Agr index Rp", W1_HNOAG="Non-agr index Rp",
+                       asin_PCTFORGRS_CATRP100="ForestGrass Rp",Lpt01_XCMGW="Riparian cover",
+                       LRBS_use="Bed stability",L_NTL="TN",L_SULF="Sulfate"))%>%
+  mutate(model="Spatial")
+#m2_mmi
+
+#########################
+## STRUCTURAL EQUATION MODEL
+# READ IN SEM bootstrap Model
+sem_mmi<-read.csv("C:/Users/EFergus/OneDrive - Environmental Protection Agency (EPA)/a_NLA_OE_project/Project_repository/Routput/Scenario_modeling/SEM_output/XERw_m3_MMI_CI.csv")
+# Modify SEM output to get dotplot
+m3_mmi<- sem_mmi%>%
+  filter(str_detect(label,"_tot"))%>%
+  rename(term=label,
+         estimate=est.std,
+         std.error=se,
+         conf.low= ci.lower,
+         conf.high=ci.upper,
+         statistic=z,
+         p.value=pvalue)%>%
+  mutate(term = recode_factor(term, imp_tot="Impervious Rp",dam_tot="Dam",
+                              precip_tot="Precipitation",phdi_tot="Drought index",
+                              oebflow_tot="OE Bankfull flow",oelflow_tot="OE Summer flow",dexcess_tot="Evaporation indicator",
+                              strpwr_tot="Specific strm power",
+                              hag_tot="Agr index Rp", nhag_tot="Non-agr index Rp",rnat_tot="ForestGrass Rp",
+                              xcmgw_tot="Riparian cover",rbs_tot="Bed stability", tn_tot="TN", sulf_tot="Sulfate"))%>%
+
+  mutate(model="SEM")%>%
+  select(term,estimate,std.error,statistic,p.value,model)
+
+#m3_mmi
+
+#######################
+# Bring model output together
+m_set_mmi<-rbind(m1_mmi, m2_mmi,m3_mmi)
+coeff_dotplot_mmi<-dwplot(m_set_mmi)+
+  theme_bw()+
+  ggtitle("Std. model coeff: XER wade MMI")
+
+coeff_dotplot_mmi
+#dwplot(m_set,style="distribution") # Looks crazy because very high peaks for SEM
+
+# PRINT Coefficient Dot and whisker plot
+# MMI XER
+tiff(filename="C:/Users/EFergus/OneDrive - Environmental Protection Agency (EPA)/a_NLA_OE_project/Project_repository/Routput/Scenario_modeling/Figures/Dot_whisker_XER_MMI.tiff",
+     width=5, height = 6, units="in", res=200)
+coeff_dotplot_mmi
+dev.off()
+```
+
+```{r, echo=FALSE,warning=FALSE,message=FALSE}
+###############
+#### EPT
+# Multiple linear regression (non-spatial)
+m1_ept <- xer_red %>%
+  do(broom::tidy(lm(EPT_RICH_sc~ PSUMPY_SY_WS_sc+drought_mean+
+                      asin_PCTIMP_WsRp100+L_NABD_NrmStorWs_ratio+
+                      L_STRM_POWER+LOE_QLow_cl+LOE_Qbkf_cl+evap_index_sc+
+                      W1_HAG+W1_HNOAG+asin_PCTFORGRS_CATRP100+
+                      Lpt01_XCMGW+LRBS_use+L_NTL+L_SULF, data= xer_org))) %>% # Will "tidy" lm coefficient output into a tibble
+  #rename(model=am)%>%
+  relabel_predictors(c(asin_PCTIMP_WsRp100="Impervious Rp",L_NABD_NrmStorWs_ratio="Dam",
+                       PSUMPY_SY_WS_sc="Precipitation",Tmax8110Ws="Max Temp",drought_mean="Drought index",
+                       LOE_Qbkf_cl="OE Bankfull flow",LOE_QLow_cl="OE Summer flow",evap_index_sc="Evaporation indicator",
+                       L_STRM_POWER="Specific strm power",W1_HAG="Agr index Rp", W1_HNOAG="Non-agr index Rp",
+                       asin_PCTFORGRS_CATRP100="ForestGrass Rp",Lpt01_XCMGW="Riparian cover",
+                       LRBS_use="Bed stability",L_NTL="TN",L_SULF="Sulfate"))%>%
+  mutate(model="Multiple reg")
+
+#m1_ept
+
+#################
+# SPATIAL MODEL
+
+##########
+# Spatial GLM Gaussian distribution and exponential covariance structure
+m2_ept<- xer_sf%>%
+  do(broom::tidy(splm(EPT_RICH_sc~ PSUMPY_SY_WS_sc+drought_mean+
+                        asin_PCTIMP_WsRp100+L_NABD_NrmStorWs_ratio+
+                        L_STRM_POWER+LOE_QLow_cl+LOE_Qbkf_cl+evap_index_sc+
+                        W1_HAG+W1_HNOAG+asin_PCTFORGRS_CATRP100+
+                        Lpt01_XCMGW+LRBS_use+L_NTL+L_SULF,
+                      xer_sf, spcov_type="exponential")))%>%
+  relabel_predictors(c(asin_PCTIMP_WsRp100="Impervious Rp",L_NABD_NrmStorWs_ratio="Dam",
+                       PSUMPY_SY_WS_sc="Precipitation",Tmax8110Ws="Max Temp",drought_mean="Drought index",
+                       LOE_Qbkf_cl="OE Bankfull flow",LOE_QLow_cl="OE Summer flow",evap_index_sc="Evaporation indicator",
+                       L_STRM_POWER="Specific strm power",W1_HAG="Agr index Rp", W1_HNOAG="Non-agr index Rp",
+                       asin_PCTFORGRS_CATRP100="ForestGrass Rp",Lpt01_XCMGW="Riparian cover",
+                       LRBS_use="Bed stability",L_NTL="TN",L_SULF="Sulfate"))%>%
+  mutate(model="Spatial")
+#m2_ept
+
+#########################
+## STRUCTURAL EQUATION MODEL
+# READ IN SEM bootstrap EPT Model
+sem_ept<-read.csv("C:/Users/EFergus/OneDrive - Environmental Protection Agency (EPA)/a_NLA_OE_project/Project_repository/Routput/Scenario_modeling/SEM_output/XERw_m3_EPT_CI.csv")
+# Modify SEM output to get dotplot
+m3_ept<- sem_ept%>%
+  filter(str_detect(label,"_tot"))%>%
+  rename(term=label,
+         estimate=est.std,
+         std.error=se,
+         conf.low= ci.lower,
+         conf.high=ci.upper,
+         statistic=z,
+         p.value=pvalue)%>%
+  mutate(term = recode_factor(term, imp_tot="Impervious Rp",dam_tot="Dam",
+                              precip_tot="Precipitation",phdi_tot="Drought index",
+                              oebflow_tot="OE Bankfull flow",oelflow_tot="OE Summer flow",dexcess_tot="Evaporation indicator",
+                              strpwr_tot="Specific strm power",
+                              hag_tot="Agr index Rp", nhag_tot="Non-agr index Rp",rnat_tot="ForestGrass Rp",
+                              xcmgw_tot="Riparian cover",rbs_tot="Bed stability", tn_tot="TN", sulf_tot="Sulfate"))%>%
+
+  mutate(model="SEM")%>%
+  select(term,estimate,std.error,statistic,p.value,model)
+
+#m3_ept
+
+#######################
+# Bring EPT model output together
+m_set_ept<-rbind(m1_ept, m2_ept,m3_ept)
+coeff_dotplot_ept<-dwplot(m_set_ept)+
+  theme_bw()+
+  ggtitle("Std. model coeff: XER wade EPT")
+
+coeff_dotplot_ept
+
+# PRINT Coefficient Dot and whisker plot
+# EPT XER
+tiff(filename="C:/Users/EFergus/OneDrive - Environmental Protection Agency (EPA)/a_NLA_OE_project/Project_repository/Routput/Scenario_modeling/Figures/Dot_whisker_XER_EPT.tiff",
+     width=5, height = 6, units="in", res=200)
+coeff_dotplot_ept
+dev.off()
+```
+
+Comparison of SEM and multiple regression approaches from the UCLA statistical consulting resource site that explains the differences we see in coefficient estimates and standard errors. 
+https://stats.oarc.ucla.edu/r/seminars/rsem/#s2a
+
+If I’m understanding it correctly, I think we are seeing differences for a few reasons. 
+1)	The path analysis model allows for endogenous variables to predict other endogenous variables, whereas the multiple regression includes only exogenous variables. We could build a multivariate regression where only exogenous variables predict endogenous variables – and this would look like separate multiple regression models (if we fix covariances among endogenous variables to be zero – see point 3). But there’s good reason to include regression paths between endogenous variables based on our understanding of the system.
+2)	The path analysis model we specify is not a saturated model meaning that we don’t have all possible arrows going to every box. Multiple regression models are saturated models meaning that all parameters are fully estimated and there are no degrees of freedom. Maybe if we made our path analysis model fully saturated, model coefficients would be similar to MLR. We could try this – but I think it would be easier to explore on a dummy, simplified model.
+3)	The lavaan path analysis model by default includes covariances among the residual variances for any endogenous variables that do not have a regression path between one another (see diagram below). These covariances account for shared residual variance after accounting for specified predictor effects in the model. MLR assumes zero covariance. I think the covariance terms in the path analysis model lead to smaller standard errors around the model coefficients.
+4)	In R lm() uses least squares and lavaan uses maximum likelihood for model estimation. The residual variance estimates will differ slightly using these different approaches.

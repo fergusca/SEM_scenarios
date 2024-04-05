@@ -1,0 +1,6 @@
+Models,RMSE
+mlr,0.405
+sem,0.399
+sp,0.399
+rf,0.408
+rfsp,0.409

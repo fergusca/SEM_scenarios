@@ -1,0 +1,317 @@
+---
+title: "SEM (v8) for macroinvertebrate assemblages in XER wadeable streams"
+author: "C. Emi Fergus"
+date: "2024-03-27"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+SEM summaries for macroinvertebrate O/E richness, MMI, and EPT in Xeric wadeable streams. Hypothesized model (v8) has been revised to change to %impervious surface in the 100m catchment buffer (instead of 100m watershed buffer), dropped drought, and made specifc stream power an exogenous variable.
+
+
+```{r, echo=FALSE, warning=FALSE,message=FALSE}
+## PACKAGES AND DATA
+remove(list=ls())
+library(tidyverse)
+library(ggplot2)
+library(forcats)
+library(kableExtra)
+library(knitr)
+library(stringr)
+
+library(devtools)
+devtools::load_all()
+library(SEMscenarios)
+
+# SEM Standardized OUTPUT
+# ECO9 XER v8
+## OE
+oe<-read.csv("C:/Users/efergus/SEMscenarios/Routput/Scenario_modeling/SEM_output/XERw_v8_OE_CI.csv")
+
+## MMI
+mmi<- read.csv("C:/Users/efergus/SEMscenarios/Routput/Scenario_modeling/SEM_output/XERw_v8_MMI_CI.csv")
+
+## EPT
+ept<- read.csv("C:/Users/efergus/SEMscenarios/Routput/Scenario_modeling/SEM_output/XERw_v8_EPT_CI.csv")
+
+```
+
+```{r, echo=FALSE, message=FALSE}
+# PROCESSING ESTIMATED MODEL EFFECTS 
+
+# Need to treat SEMNRSA like a package to be able to run multimerge function
+#devtools::load_all()
+
+# Call function sem_eff_tab to process the raw SEM output
+# Selects Total, Direct, and Indirect Effects on OE
+# And relabels predictor variables to more useful names
+# O/E
+oe_proc<- sem_eff_tab_v2(oe)
+#names(oe_proc)
+
+# MMI
+mmi_proc<-sem_eff_tab_v2(mmi)
+
+# EPT
+ept_proc<-sem_eff_tab_v2(ept)
+
+```
+
+## Revised path analysis model to test (v8)
+```{r, echo=FALSE, fig.cap="",out.width='50%'}
+knitr::include_graphics("C:/Users/EFergus/OneDrive - Environmental Protection Agency (EPA)/a_NLA_OE_project/Project_repository/Routput/Scenario_modeling/Figures/XER_hyp_model_v8.png")
+```
+
+## XER SEM Model Fit Tables
+```{r, echo=FALSE, message=FALSE,warning=FALSE}
+# LOAD SEM MODEL FIT TABLES
+fit_xer_oe<-read.csv("C:/Users/efergus/SEMscenarios/Routput/Scenario_modeling/SEM_output/XERw_v8_OE_fit.csv")
+
+fit_xer_mmi<- read.csv("C:/Users/efergus/SEMscenarios/Routput/Scenario_modeling/SEM_output/XERw_v8_MMI_fit.csv")
+
+fit_xer_ept <- read.csv("C:/Users/efergus/SEMscenarios/Routput/Scenario_modeling/SEM_output/XERw_v8_EPT_fit.csv")
+
+fit_x<-bind_rows(fit_xer_oe,fit_xer_mmi, fit_xer_ept)
+fit_x<-fit_x%>%
+  filter(Estimation=="Robust")
+
+# Read in S:N and maxR2 for XER w - calculated in inst>analysis>signal_noise_2023_0209.R
+SN<-read_csv("C:/Users/EFergus/OneDrive - Environmental Protection Agency (EPA)/a_NLA_OE_project/Project_repository/Routput/SEM_output/XERw_SN_MaxR2.csv")
+
+SN_red<-SN%>%
+  select(SN_RATIO,MaxR2)
+
+fit_x_mod<-cbind(fit_x,SN_red)%>%
+  mutate(MaxR2=round(MaxR2,2))%>%
+  mutate(scaledR2=round(R2/MaxR2,2))
+
+kable(fit_x_mod, caption = "Model fit parameters for XER and S:N and scaled R2 given MaxR2 ")%>%
+  kable_styling()
+
+```
+
+
+## R2 for XER models
+```{r, echo=FALSE,warning=FALSE, message=FALSE}
+# Read in R2 tables for all endogenous variables
+# XER O/E
+R2_xer_oe<- read.csv("C:/Users/efergus/SEMscenarios/Routput/Scenario_modeling/SEM_output/XERw_v8_OE_R2.csv")
+
+R2_xer_mmi<-read.csv("C:/Users/efergus/SEMscenarios/Routput/Scenario_modeling/SEM_output/XERw_v8_MMI_R2.csv")
+
+R2_xer_ept<-read.csv("C:/Users/efergus/SEMscenarios/Routput/Scenario_modeling/SEM_output/XERw_v8_EPT_R2.csv")
+
+# Apply R2 table rename function
+R2_xer_oe_mod<-sem_r2_tab_v2(R2_xer_oe)
+R2_xer_mmi_mod<-sem_r2_tab_v2(R2_xer_mmi)
+R2_xer_ept_mod<-sem_r2_tab_v2(R2_xer_ept)
+
+# Modify tables and then bring together
+R2_xer_oe_mod2<-R2_xer_oe_mod%>%
+  mutate(Model = "OE")%>%
+  select(Model,Response,R2)%>%
+  #rename(R2 = est, Response=lhs)%>%
+  mutate(across(where(is.numeric), round,2))
+
+R2_xer_mmi_mod2<-R2_xer_mmi_mod%>%
+  mutate(Model = "MMI")%>%
+  select(Model,Response,R2)%>%
+  #rename(R2 = est, Response=lhs)%>%
+  mutate(across(where(is.numeric), round,2))
+
+R2_xer_ept_mod2<-R2_xer_ept_mod%>%
+  mutate(Model = "EPT")%>%
+  select(Model,Response,R2)%>%
+  #rename(R2 = est, Response=lhs)%>%
+  mutate(across(where(is.numeric), round,2))
+
+r2_all_x<-bind_rows(R2_xer_oe_mod2,R2_xer_mmi_mod2, R2_xer_ept_mod2)
+
+r2_all_mod<-r2_all_x%>%
+     pivot_wider(names_from = "Model",
+              values_from="R2")#%>%
+#  mutate(Response = ordered(c("Stream power","OE Summer flow","OE Bankfull #flow","Evaporation indicator", "Channel incision", "Riparian cover","Habitat #richness","Critical diameter","Mean diameter", "TN","Sulfate", #"OE","MMI","EPT")))
+
+
+   
+
+```
+
+```{r, echo=FALSE}
+kable(r2_all_mod, caption = "R2 estimates across macroinvertebrate models")%>%
+  kable_styling()
+```
+
+The revised SEM (v8) includes the channel incision, habitat richness, and % sands/fines. Each of the models fit the Xeric data relatively well based on model fit criteria (CFI > 0.90; SRMR <0.06; RMSEA < 0.08). The fitted model account for 34% of variation in macroinvertebrate O/E. Scaling this value by the maximum possible R2 given the signal:noise of O/E, we find that the model accounts for ~45% of O/E variation that can can be explained.  
+
+## Barchart of total standardized effects on macroinvertebrate assemblages
+```{r,echo=FALSE,warning=FALSE,message=FALSE}
+###################
+## PLOTTING SPECIFICATIONS
+#####################
+## Set font for plot
+windowsFonts(RMN=windowsFont("Times New Roman")) #RMN = Times New Roman
+windowsFonts(AR=windowsFont("Arial"))
+
+# SET COLOR PALATE FOR BY DRIVER CATEGORY
+
+# Viridis Color palette
+# https://waldyrious.net/viridis-palette-generator/
+vid <- c("#440154","#443983","#31688e","#773487","#35b779","#90d743","#fde725")
+
+#############
+## READ IN MODEL OUTPUT MODEL v2 XER
+# SEM Standardized OUTPUT
+## OE
+oe<-read.csv("C:/Users/efergus/SEMscenarios/Routput/Scenario_modeling/SEM_output/XERw_v8_OE_CI.csv")
+
+## MMI
+mmi<-read.csv("C:/Users/efergus/SEMscenarios/Routput/Scenario_modeling/SEM_output/XERw_v8_MMI_CI.csv")
+
+## EPT
+ept<-read.csv("C:/Users/efergus/SEMscenarios/Routput/Scenario_modeling/SEM_output/XERw_v8_EPT_CI.csv")
+
+#####################
+# PROCESS effects data frame for plotting
+#####################
+# Call function sem_eff_tab_v2 to process the raw SEM output
+# Selects Total, Direct, and Indirect Effects on OE
+# And relabels predictor variables to more useful names
+# O/E
+oe_proc<- sem_eff_tab_v2(oe)%>%
+  mutate(Model="OE")
+
+# MMI
+mmi_proc<- sem_eff_tab_v2(mmi)%>%
+  mutate(Model="MMI")
+
+# EPT
+ept_proc<- sem_eff_tab_v2(ept)%>%
+  mutate(Model="EPT")
+
+#############################
+# Combine datasets
+teff<- bind_rows(oe_proc,mmi_proc,ept_proc)
+
+# ORDER PREDICTOR VARIABLES
+teff$Predictor <- ordered(teff$Predictor, levels=c("Agriculture Ws","Developed CAT","Impervious Rp-Cat","Dam stor Ws","Precipitation","Max Temp","Drought index","OE Bankfull flow","OE Summer flow","Evaporation indicator","Slope*depth","Specific stream power","Channel incision","Critical diameter","Ag index Rp-S","Non-ag index Rp-S","Forest Rp","Forest/Grass Rp-CAT","Wetland Rp-W","Site-riparian cover index","Instream cover","Habitat richness", "Relative bed stability","Mean diameter","Sands/fines","TP","TN","Sulfate","Turbidity")) #"Instream cover","agr","SO4"
+#table(teff$Predictor)
+
+
+# CREATE CATEGORIES
+teff$Category <-teff$Predictor
+teff <- teff %>%
+  mutate(Category = recode_factor(Category,
+                                  "Agriculture Ws"="Watershed land use","Developed CAT"="Watershed land use","Impervious Rp-Cat"="Watershed land use","Dam stor Ws"="Watershed land use","Max Temp"="Climate","Precipitation"="Climate","Drought index"="Climate","Slope*depth"="Morphometry","Specific stream power"="Hydromorphology","Forest Rp"="Riparian cover",  "Wetland Rp-W"="Riparian cover","Forest/Grass Rp-CAT"="Riparian cover","OE Bankfull flow"="Hydromorphology","OE Summer flow"="Hydromorphology","Evaporation indicator"="Hydromorphology","Channel incision"='Hydromorphology', "Critical diameter"="Hydromorphology", "Site-riparian cover index"="Riparian cover", "Relative bed stability"="Habitat","Mean diameter"="Habitat", "Sands/fines"="Habitat","Instream cover"="Habitat","Habitat richness"="Habitat","Ag index Rp-S" = "Reach land use", "Non-ag index Rp-S" = "Reach land use","TN"="Chemistry","TP"="Chemistry","Sulfate"="Chemistry","Turbidity"="Chemistry")) #
+
+teff$Category <- ordered(teff$Category, levels=c("Watershed land use","Climate","Hydromorphology","Reach land use","Riparian cover","Habitat","Chemistry")) #"Hydrology","Morphometry"
+#table(teff$Category)
+
+
+# ORDER EFFECT
+teff$Effects <- ordered(teff$Effects, levels=c("Total","Direct","Indirect"))
+#table(teff$Effects)
+
+# ORDER BY RESPONSE AND DRIVER CLASS
+teff$model<-ordered(teff$Model, levels=c("OE","MMI","EPT"))
+
+## SUBSET DATA TO HAVE ONLY TOTAL EFFECTS
+teff_total <- teff %>%
+  filter(Effects == "Total")
+
+#####################
+# Process to be able to create background guidelines in plot
+teff_total2 <- teff_total%>%
+  mutate(Predictor=factor(Predictor,exclude=c("Agriculture Ws","Developed CAT","Max Temp",
+                                              "Slope*depth","Forest Rp","Wetland Rp-W",
+                                              "Instream cover","TP","Turbidity")))
+
+```
+
+```{r,echo=FALSE,warning=FALSE,fig.width=6.7,fig.height=9}
+############################
+## FIGURE WITH THREE PANELS: OE, MMI, EPT
+#########################
+# Annotated R2 to add to figures
+#https://stackoverflow.com/questions/11889625/annotating-text-on-individual-facet-in-ggplot2
+#https://r-graphics.org/recipe-annotate-facet
+ann_text<-data.frame(Predictor=17, est.std=0.4, label=c("R2=0.34","R2=0.44","R2=0.46"),
+                     Model=factor(c("OE","MMI","EPT")),Category=c("Watershed land use"))
+# ORDER BY RESPONSE AND DRIVER CLASS
+ann_text$model<-ordered(ann_text$Model, levels=c("OE","MMI","EPT"))
+
+
+## TOTAL EFFECTS OE
+total<-ggplot(teff_total2,aes(Predictor,est.std,fill=Category)) +
+  geom_bar(stat = "identity", position=position_dodge()) +
+  geom_errorbar(aes(ymin=ci.lower, ymax=ci.upper), width=.2, # est_std-se_std
+                position=position_dodge(.9))+
+  scale_fill_manual(values=vid, drop=TRUE)+
+  #scale_fill_manual(values=cbPalette, drop=TRUE)+
+  geom_rect(aes(xmin=as.integer(Predictor)-0.5,
+                xmax=as.integer(Predictor)+0.5,
+                ymin=-Inf,ymax=Inf),# ...,color=Category),linewidth=0.3,fill=NA,#fill=alpha("grey",0),
+            alpha=0.2)+
+  #geom_vline(xintercept=c())
+  ylim(-0.55,0.55)+
+  facet_wrap(~model, ncol=1)+
+  geom_text(x=15,y=0.4, aes(label=label),data=ann_text)+
+  geom_hline(aes(yintercept = 0))+
+  theme_bw(base_size=12)+
+  theme(plot.title = element_text(family = "AR",face="plain",size=14, hjust=0.5),
+        axis.text.x = element_text(family = "AR", angle=45, hjust=1,size=12,
+                                   colour=c(rep("#440154",2),rep("#443983",1), rep("#31688e",5),rep("#773487",2), #teal rep("#21918c",4),
+                                            rep("#35b779",2),rep("#90d743",2),rep("#fde725",2))),#, colour=c(rep("#8c510a",3),rep("#bf812d",1),rep("#dfc27d",3),rep("#c7eae5",2),rep("#80cdc1",1),rep("#c7eae5",1),rep("#35978f",2),rep("#01665e",1))),
+        axis.text.y = element_text(family = "AR", size=12),
+        axis.title.y = element_text(family="AR"), #element_blank(),#
+        strip.text.x = element_text(family="AR", size=12),
+        panel.grid.major =  element_line(colour = NA),
+        panel.grid.minor=element_line(colour = NA),
+        # panel.spacing = unit(c(1,1,0,4), "lines"),
+        legend.position= "bottom",
+        legend.key.size = unit(10, 'point'),
+        legend.title=element_blank(),
+        legend.text=element_text(family="AR", size=11))+
+  ylab("Total standardized effects")+
+  xlab(NULL)+
+  ggtitle("XER")
+
+
+total
+
+```
+
+
+## Fitted path analysis model for XER O/E (v8)
+```{r, echo=FALSE, fig.cap="",out.width='70%'}
+knitr::include_graphics("C:/Users/EFergus/OneDrive - Environmental Protection Agency (EPA)/a_NLA_OE_project/Project_repository/Routput/Scenario_modeling/Figures/XER_OE_path_v8.png")
+```
+
+## SemPlot path analysis model for XER O/E (v8)
+```{r, echo=FALSE, fig.cap="",out.width='70%'}
+knitr::include_graphics("C:/Users/EFergus/OneDrive - Environmental Protection Agency (EPA)/a_NLA_OE_project/Project_repository/Routput/Scenario_modeling/Figures/semPlot_OEv8.png")
+```
+
+
+
+## Table of SEM effects: XER OE
+```{r, echo=FALSE}
+kable(oe_proc, caption = "XER OE: Standardized Direct, Indirect, and Total Effects on benthic O/E")%>%
+  kable_styling()
+```
+
+
+## Table of SEM effects: XER MMI
+```{r, echo=FALSE}
+kable(mmi_proc, caption = "XER MMI: Standardized Direct, Indirect, and Total Effects on benthic MMI")%>%
+  kable_styling()
+```
+
+
+## Table of SEM effects: XER EPT
+```{r, echo=FALSE,warning=FALSE}
+kable(ept_proc, caption = "XER EPT: Standardized Direct, Indirect, and Total Effects on benthic EPT")%>%
+  kable_styling()
+```
